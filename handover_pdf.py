@@ -224,6 +224,16 @@ class HandoverPDF(FPDF):
         return lines
 
 
+def _is_open(status):
+    """True if a status word means the item is not yet resolved."""
+    if not status:
+        return True
+    return str(status).strip().lower() in {
+        "open", "pending", "outstanding", "back order", "not ordered",
+        "not installed", "partial", "in progress", "on order", "issue", ""
+    }
+
+
 def build_pdf(data, out_path):
     meta = data.get("meta", {})
     pdf = HandoverPDF(meta)
@@ -243,42 +253,72 @@ def build_pdf(data, out_path):
         ("Contract Ref", meta.get("contract_ref")),
     ], cols=2)
 
-    # --- Summary / general notes ---
+    # --- Handover summary ---
     if data.get("general_notes"):
         pdf.section("Handover Summary")
         pdf.para(data["general_notes"])
 
-    # --- Key contacts ---
-    pdf.section("Key Contacts")
+    # --- ACTIONS FIRST — what the incoming PM needs to do ---
+    pdf.section("What Needs To Happen Next  (Outstanding Actions)")
+    actions = data.get("actions", [])
+    if actions:
+        # Sort: High first, then Medium, then Low / blank
+        priority_order = {"high": 0, "medium": 1, "low": 2}
+        actions_sorted = sorted(
+            actions,
+            key=lambda a: priority_order.get(str(a.get("priority", "")).lower(), 3)
+        )
+        pdf.data_table(
+            ["Action", "Who", "Due", "Priority"],
+            [[a.get("action"), a.get("owner"), a.get("due"), a.get("priority")]
+             for a in actions_sorted],
+            widths=[90, 30, 22, 18],
+        )
+    else:
+        pdf.para("No outstanding actions recorded.")
+
+    # --- Open site requests ---
+    open_requests = [s for s in data.get("site_requests", []) if _is_open(s.get("status"))]
+    all_requests = data.get("site_requests", [])
+    pdf.section("Site Requests & Queries")
+    if open_requests:
+        pdf.para(f"{len(open_requests)} open of {len(all_requests)} total:")
     pdf.data_table(
-        ["Role", "Name", "Company", "Email / Phone"],
-        [[c.get("role"), c.get("name"), c.get("company"),
-          " / ".join(x for x in [c.get("email"), c.get("phone")] if x)]
-         for c in data.get("contacts", [])],
-        widths=[22, 26, 30, 42],
+        ["Date", "Request / Query", "Raised By", "Status", "Action / Owner"],
+        [[s.get("date"), s.get("request"), s.get("raised_by"),
+          s.get("status"), s.get("action")]
+         for s in all_requests],
+        widths=[18, 58, 24, 20, 30],
+        status_col=3,
     )
 
-    # --- Hardware schedule status ---
-    pdf.section("Hardware Schedule Status")
-    sch = data.get("schedule", {})
-    pdf.kv_grid([
-        ("Schedule Revision", sch.get("revision")),
-        ("Total Openings / Doors", sch.get("total_openings")),
-        ("Total Line Items", sch.get("total_line_items")),
-        ("Schedule Status", sch.get("status")),
-    ], cols=2)
-    if sch.get("notes"):
-        pdf.para(sch["notes"])
-
-    # --- Ordering / procurement ---
-    pdf.section("Ordering & Procurement Status")
+    # --- Open variations ---
+    open_vars = [v for v in data.get("variations", []) if _is_open(v.get("status"))]
+    all_vars = data.get("variations", [])
+    pdf.section("Variations")
+    if open_vars:
+        pdf.para(f"{len(open_vars)} pending of {len(all_vars)} total:")
     pdf.data_table(
-        ["Item / Description", "Supplier", "PO Ref", "Order Date", "ETA", "Status"],
+        ["Ref", "Description", "Value", "Status"],
+        [[v.get("ref"), v.get("description"), v.get("value"), v.get("status")]
+         for v in all_vars],
+        widths=[18, 76, 26, 20],
+        status_col=3,
+    )
+
+    # --- Ordering — highlight anything not complete ---
+    pdf.section("Orders & Procurement")
+    open_orders = [o for o in data.get("ordering", []) if _is_open(o.get("status"))]
+    all_orders = data.get("ordering", [])
+    if open_orders:
+        pdf.para(f"{len(open_orders)} items still outstanding:")
+    pdf.data_table(
+        ["Item / Description", "Supplier", "PO Ref", "ETA", "Status"],
         [[o.get("description"), o.get("supplier"), o.get("po_ref"),
-          o.get("order_date"), o.get("eta"), o.get("status")]
-         for o in data.get("ordering", [])],
-        widths=[44, 24, 20, 20, 20, 24],
-        status_col=5,
+          o.get("eta"), o.get("status")]
+         for o in all_orders],
+        widths=[50, 28, 22, 22, 28],
+        status_col=4,
     )
 
     # --- Deliveries ---
@@ -287,7 +327,7 @@ def build_pdf(data, out_path):
         ["Item / Description", "Location", "Date", "Status"],
         [[d.get("description"), d.get("location"), d.get("date"), d.get("status")]
          for d in data.get("deliveries", [])],
-        widths=[60, 32, 24, 24],
+        widths=[60, 34, 22, 24],
         status_col=3,
     )
 
@@ -301,35 +341,28 @@ def build_pdf(data, out_path):
         status_col=2,
     )
 
-    # --- Site requests ---
-    pdf.section("Site Requests & Queries")
+    # --- Key contacts ---
+    pdf.section("Key Contacts")
     pdf.data_table(
-        ["Date", "Request / Query", "Raised By", "Status", "Action / Owner"],
-        [[s.get("date"), s.get("request"), s.get("raised_by"),
-          s.get("status"), s.get("action")]
-         for s in data.get("site_requests", [])],
-        widths=[18, 56, 24, 20, 32],
-        status_col=3,
+        ["Role", "Name", "Company", "Email / Phone"],
+        [[c.get("role"), c.get("name"), c.get("company"),
+          " / ".join(x for x in [c.get("email"), c.get("phone")] if x)]
+         for c in data.get("contacts", [])],
+        widths=[24, 28, 32, 56],
     )
 
-    # --- Variations ---
-    pdf.section("Variations")
-    pdf.data_table(
-        ["Ref", "Description", "Value", "Status"],
-        [[v.get("ref"), v.get("description"), v.get("value"), v.get("status")]
-         for v in data.get("variations", [])],
-        widths=[18, 70, 26, 26],
-        status_col=3,
-    )
-
-    # --- Outstanding actions ---
-    pdf.section("Outstanding Actions & Risks")
-    pdf.data_table(
-        ["Action", "Owner", "Due", "Priority"],
-        [[a.get("action"), a.get("owner"), a.get("due"), a.get("priority")]
-         for a in data.get("actions", [])],
-        widths=[78, 28, 22, 22],
-    )
+    # --- Hardware schedule ---
+    sch = data.get("schedule", {})
+    if any(sch.get(k) for k in ("revision", "total_openings", "status", "notes")):
+        pdf.section("Hardware Schedule")
+        pdf.kv_grid([
+            ("Schedule Revision", sch.get("revision")),
+            ("Total Openings / Doors", sch.get("total_openings")),
+            ("Total Line Items", sch.get("total_line_items")),
+            ("Schedule Status", sch.get("status")),
+        ], cols=2)
+        if sch.get("notes"):
+            pdf.para(sch["notes"])
 
     # --- Financials ---
     fin = data.get("financials", {})
@@ -344,14 +377,15 @@ def build_pdf(data, out_path):
         if fin.get("notes"):
             pdf.para(fin["notes"])
 
-    # --- Correspondence log ---
-    pdf.section("Correspondence Log")
-    pdf.data_table(
-        ["Date", "From", "Subject", "Summary"],
-        [[e.get("date"), e.get("from"), e.get("subject"), e.get("summary")]
-         for e in data.get("email_log", [])],
-        widths=[18, 28, 42, 52],
-    )
+    # --- Correspondence log (reference, end of doc) ---
+    if data.get("email_log"):
+        pdf.section("Correspondence Log")
+        pdf.data_table(
+            ["Date", "From", "Subject", "Summary"],
+            [[e.get("date"), e.get("from"), e.get("subject"), e.get("summary")]
+             for e in data.get("email_log", [])],
+            widths=[18, 28, 44, 50],
+        )
 
     pdf.output(out_path)
     return out_path
