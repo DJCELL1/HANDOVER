@@ -133,7 +133,7 @@ with tabs[0]:
                     added += 1
                 except Exception as e:
                     st.warning(f"Could not parse {f.name}: {e}")
-            st.success(f"Added {added} email(s).")
+            st.success(f"Added {added} email(s). Now click **Fill in handover from emails** below.")
 
     with tab_paste:
         st.caption(
@@ -144,7 +144,6 @@ with tabs[0]:
         if st.button("Parse & add pasted email"):
             if pb.strip():
                 parsed = parse_pasted_text(pb)
-                # Let the user correct anything that wasn't auto-detected
                 st.markdown("**Detected fields — correct if needed before adding:**")
                 c1, c2 = st.columns(2)
                 parsed["from"] = c1.text_input("From", parsed["from"], key="p_from")
@@ -154,7 +153,7 @@ with tabs[0]:
                     proj["_emails_full"].append(parsed)
                     proj["email_log"].append({"date": parsed["date"], "from": parsed["from"],
                                               "subject": parsed["subject"], "summary": ""})
-                    st.success("Email added.")
+                    st.success("Email added. Now click **Fill in handover from emails** below.")
                     st.rerun()
             else:
                 st.warning("Paste some email text first.")
@@ -176,34 +175,53 @@ with tabs[0]:
                 st.divider()
 
     st.divider()
-    st.markdown("### Auto-draft from emails (optional)")
+
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        st.info("Set ANTHROPIC_API_KEY in your environment to enable auto-draft. "
-                "Without it you can still fill everything in by hand.")
+        st.warning(
+            "**Auto-fill is not enabled.** To have Claude read your emails and fill in the "
+            "entire handover automatically, add your `ANTHROPIC_API_KEY` in the app settings "
+            "(Streamlit Cloud → App → Settings → Secrets)."
+        )
     else:
-        st.caption("Sends the parsed emails to Claude and pre-fills the handover sections. "
-                   "You review and edit everything after.")
-        if st.button("Auto-draft handover from emails"):
-            if not proj["_emails_full"]:
-                st.error("Add some emails first.")
-            else:
-                with st.spinner("Reading emails and drafting..."):
-                    try:
-                        draft = ai_draft(proj["_emails_full"], proj["meta"])
-                        for k in ["ordering", "deliveries", "installation", "site_requests",
-                                  "variations", "actions", "contacts"]:
-                            if draft.get(k):
-                                proj[k] = draft[k]
-                        if draft.get("general_notes"):
-                            proj["general_notes"] = draft["general_notes"]
-                        if draft.get("email_log"):
-                            proj["email_log"] = draft["email_log"]
-                        if draft.get("schedule"):
-                            proj["schedule"].update({k: v for k, v in draft["schedule"].items() if v})
-                        st.success("Drafted. Check every tab and correct as needed.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Auto-draft failed: {e}")
+        n = len(proj["_emails_full"])
+        st.markdown("### Step 2 — Fill in the handover from your emails")
+        st.caption(
+            "Claude will read all your emails and fill in project details, contacts, orders, "
+            "deliveries, installation status, actions, and more. You review and correct after."
+        )
+        if st.button(
+            f"Fill in handover from {n} email(s)" if n else "Fill in handover from emails",
+            type="primary",
+            disabled=n == 0,
+        ):
+            with st.spinner("Reading emails and filling in the handover — this takes 20-30 seconds..."):
+                try:
+                    draft = ai_draft(proj["_emails_full"], proj["meta"])
+
+                    # Apply meta fields (only overwrite blanks unless we have something better)
+                    if draft.get("meta"):
+                        for k, v in draft["meta"].items():
+                            if v and not proj["meta"].get(k):
+                                proj["meta"][k] = v
+
+                    # Apply all sections
+                    for k in ["ordering", "deliveries", "installation", "site_requests",
+                               "variations", "actions", "contacts"]:
+                        if draft.get(k):
+                            proj[k] = draft[k]
+                    if draft.get("general_notes"):
+                        proj["general_notes"] = draft["general_notes"]
+                    if draft.get("email_log"):
+                        proj["email_log"] = draft["email_log"]
+                    if draft.get("schedule"):
+                        proj["schedule"].update({k: v for k, v in draft["schedule"].items() if v})
+                    if draft.get("financials"):
+                        proj["financials"].update({k: v for k, v in draft["financials"].items() if v})
+
+                    st.success("Done! Check every tab — correct anything that looks wrong, then save and generate the PDF.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Auto-fill failed: {e}")
 
 with tabs[1]:
     st.subheader("Project overview")
