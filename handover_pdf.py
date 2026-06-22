@@ -111,14 +111,32 @@ class HandoverPDF(FPDF):
             self.set_x(x)
             self.set_text_color(*TEXT)
             self.set_font("Helvetica", "", 10)
-            self.multi_cell(col_w - 4, 5, str(value) if value else "-", new_x="LEFT", new_y="TOP")
+            self.multi_cell(col_w - 4, 5, self._safe(value), new_x="LEFT", new_y="TOP")
             i += 1
         self.ln(9)
+
+    @staticmethod
+    def _safe(text):
+        """Replace unicode characters that Helvetica/latin-1 can't encode."""
+        if not text:
+            return "-"
+        text = str(text)
+        replacements = {
+            "‘": "'", "’": "'",   # smart single quotes
+            "“": '"', "”": '"',   # smart double quotes
+            "–": "-", "—": "-",   # en/em dash
+            "•": "-", "‣": "-",   # bullet points
+            "…": "...",                # ellipsis
+            " ": " ",                  # non-breaking space
+        }
+        for k, v in replacements.items():
+            text = text.replace(k, v)
+        return text.encode("latin-1", errors="replace").decode("latin-1")
 
     def para(self, text):
         self.set_font("Helvetica", "", 9.5)
         self.set_text_color(*TEXT)
-        self.multi_cell(0, 5, text if text else "-")
+        self.multi_cell(0, 5, self._safe(text))
         self.ln(2)
 
     def data_table(self, headings, rows, widths, status_col=None):
@@ -152,7 +170,7 @@ class HandoverPDF(FPDF):
             line_h = 4.6
             heights = []
             for val, w in zip(row, col_w):
-                txt = str(val) if val not in (None, "") else "-"
+                txt = self._safe(val)
                 n = self._count_lines(txt, w - 2)
                 heights.append(n * line_h)
             row_h = max(max(heights), 6)
@@ -174,7 +192,7 @@ class HandoverPDF(FPDF):
                 self.set_fill_color(248, 249, 251)
                 self.rect(x, y0, 180, row_h, "F")
             for idx, (val, w) in enumerate(zip(row, col_w)):
-                txt = str(val) if val not in (None, "") else "-"
+                txt = self._safe(val)
                 self.set_xy(x, y0 + 1)
                 if status_col is not None and idx == status_col:
                     self.set_text_color(*_status_colour(val))
