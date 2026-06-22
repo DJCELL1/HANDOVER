@@ -106,3 +106,61 @@ def parse_upload(filename, file_bytes):
         return parse_msg(file_bytes)
     # default treat as eml / mime
     return parse_eml(file_bytes)
+
+
+def parse_pasted_text(text):
+    """
+    Try to extract From/Date/Subject/Body from raw pasted email text.
+    Handles Outlook copy-paste which includes headers at the top.
+    """
+    import re
+
+    lines = text.splitlines()
+
+    result = {"date": "", "from": "", "to": "", "subject": "", "body": ""}
+
+    # Patterns for Outlook-style pasted headers
+    header_patterns = {
+        "from": re.compile(r"^From:\s*(.+)$", re.IGNORECASE),
+        "to": re.compile(r"^To:\s*(.+)$", re.IGNORECASE),
+        "date": re.compile(r"^(?:Sent|Date):\s*(.+)$", re.IGNORECASE),
+        "subject": re.compile(r"^Subject:\s*(.+)$", re.IGNORECASE),
+    }
+
+    body_start = 0
+    in_headers = True
+    found_any = False
+
+    for i, line in enumerate(lines):
+        if in_headers:
+            matched = False
+            for key, pat in header_patterns.items():
+                m = pat.match(line.strip())
+                if m:
+                    result[key] = m.group(1).strip()
+                    matched = True
+                    found_any = True
+                    break
+            if not matched and found_any and line.strip() == "":
+                body_start = i + 1
+                in_headers = False
+                break
+
+    result["body"] = _clean("\n".join(lines[body_start:]))
+
+    # Try to normalise the date
+    if result["date"]:
+        try:
+            from email.utils import parsedate_to_datetime
+            result["date"] = parsedate_to_datetime(result["date"]).strftime("%d %b %Y")
+        except Exception:
+            # Try common formats
+            for fmt in ("%d/%m/%Y %I:%M %p", "%A, %d %B %Y %I:%M %p", "%d %B %Y"):
+                try:
+                    from datetime import datetime as dt
+                    result["date"] = dt.strptime(result["date"].split(",")[-1].strip(), fmt).strftime("%d %b %Y")
+                    break
+                except Exception:
+                    pass
+
+    return result

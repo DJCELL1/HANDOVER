@@ -17,7 +17,7 @@ import json
 import os
 from datetime import datetime
 
-from email_parse import parse_upload
+from email_parse import parse_upload, parse_pasted_text
 from handover_pdf import build_pdf
 from ai_draft import ai_draft
 
@@ -108,32 +108,56 @@ tabs = st.tabs(["1. Emails", "2. Project details", "3. Hardware & orders",
                 "4. Site & actions", "5. Generate PDF"])
 
 with tabs[0]:
-    st.subheader("Drop in the emails for this job")
-    st.caption("Upload .eml or .msg files. Outlook: drag an email to a folder for .msg, "
-               "or File > Save As. Gmail: open email, three dots, Download message (.eml).")
-    up = st.file_uploader("Upload emails", type=["eml", "msg"], accept_multiple_files=True)
-    if up and st.button(f"Parse {len(up)} email(s)"):
-        added = 0
-        for f in up:
-            try:
-                parsed = parse_upload(f.name, f.read())
-                proj["_emails_full"].append(parsed)
-                proj["email_log"].append({"date": parsed["date"], "from": parsed["from"],
-                                          "subject": parsed["subject"], "summary": ""})
-                added += 1
-            except Exception as e:
-                st.warning(f"Could not parse {f.name}: {e}")
-        st.success(f"Added {added} email(s).")
+    st.subheader("Add emails for this job")
 
-    with st.expander("Or paste an email manually"):
-        pf = st.text_input("From")
-        pdt = st.text_input("Date")
-        ps = st.text_input("Subject")
-        pb = st.text_area("Body")
-        if st.button("Add pasted email"):
-            proj["_emails_full"].append({"date": pdt, "from": pf, "to": "", "subject": ps, "body": pb})
-            proj["email_log"].append({"date": pdt, "from": pf, "subject": ps, "summary": ""})
-            st.success("Added")
+    st.info(
+        "**Outlook users — drag-and-drop from Outlook does not work in a browser.**\n\n"
+        "Use one of these methods instead:\n"
+        "- **Paste email text** (easiest): open the email in Outlook, select all (Ctrl+A), copy (Ctrl+C), then paste below.\n"
+        "- **Save as .msg file**: drag the email from Outlook onto your Desktop or a folder, then upload it here.\n"
+        "- **Save as .eml file**: File → Save As → choose a folder, then upload the .eml file here."
+    )
+
+    tab_upload, tab_paste = st.tabs(["Upload file (.msg / .eml)", "Paste email text"])
+
+    with tab_upload:
+        up = st.file_uploader("Upload emails", type=["eml", "msg"], accept_multiple_files=True)
+        if up and st.button(f"Parse {len(up)} email(s)"):
+            added = 0
+            for f in up:
+                try:
+                    parsed = parse_upload(f.name, f.read())
+                    proj["_emails_full"].append(parsed)
+                    proj["email_log"].append({"date": parsed["date"], "from": parsed["from"],
+                                              "subject": parsed["subject"], "summary": ""})
+                    added += 1
+                except Exception as e:
+                    st.warning(f"Could not parse {f.name}: {e}")
+            st.success(f"Added {added} email(s).")
+
+    with tab_paste:
+        st.caption(
+            "In Outlook: open the email, press Ctrl+A then Ctrl+C, and paste here. "
+            "From/Date/Subject will be detected automatically if present."
+        )
+        pb = st.text_area("Paste full email text here", height=220, key="paste_body")
+        if st.button("Parse & add pasted email"):
+            if pb.strip():
+                parsed = parse_pasted_text(pb)
+                # Let the user correct anything that wasn't auto-detected
+                st.markdown("**Detected fields — correct if needed before adding:**")
+                c1, c2 = st.columns(2)
+                parsed["from"] = c1.text_input("From", parsed["from"], key="p_from")
+                parsed["date"] = c2.text_input("Date", parsed["date"], key="p_date")
+                parsed["subject"] = st.text_input("Subject", parsed["subject"], key="p_subj")
+                if st.button("Confirm & add", key="paste_confirm"):
+                    proj["_emails_full"].append(parsed)
+                    proj["email_log"].append({"date": parsed["date"], "from": parsed["from"],
+                                              "subject": parsed["subject"], "summary": ""})
+                    st.success("Email added.")
+                    st.rerun()
+            else:
+                st.warning("Paste some email text first.")
 
     st.divider()
     st.markdown("**Correspondence log** (edit summaries here, this goes on the PDF)")
