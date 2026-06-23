@@ -59,7 +59,27 @@ def fetch_shipments(q_number):
 
 
 def fetch_sales_orders(q_number):
-    return _search("v1/SaleOrders", q_number.strip())
+    """
+    Match sales orders whose reference starts with the Q number.
+    e.g. Q12345 matches Q12345, Q12345.S1, Q12345.S2 etc.
+    """
+    q = q_number.strip()
+    results = []
+    for where in (f"reference='{q}'", f"reference like '{q}%'"):
+        try:
+            rows = _get("v1/SaleOrders", params={"where": where, "rows": 250})
+            if rows:
+                data = rows if isinstance(rows, list) else [rows]
+                # de-duplicate by id
+                seen = {r.get("id") or r.get("orderNumber") for r in results}
+                for r in data:
+                    key = r.get("id") or r.get("orderNumber")
+                    if key not in seen:
+                        results.append(r)
+                        seen.add(key)
+        except Exception:
+            pass
+    return results
 
 
 # ---------------------------------------------------------------------------
