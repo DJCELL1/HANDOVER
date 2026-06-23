@@ -105,7 +105,7 @@ with st.sidebar:
 st.title("Architectural Hardware - Project Handover")
 
 tabs = st.tabs(["1. Emails", "2. Project details", "3. Hardware & orders",
-                "4. Site & actions", "5. Generate PDF"])
+                "4. Site & actions", "5. Cin7 Live Data", "6. Generate PDF"])
 
 with tabs[0]:
     st.subheader("Add emails for this job")
@@ -305,6 +305,87 @@ with tabs[3]:
     f["notes"] = st.text_area("Financial notes", f["notes"], height=70)
 
 with tabs[4]:
+    st.subheader("Cin7 Live Data — Purchase Orders & Shipments")
+
+    _cin7_ok = "cin7" in st.secrets
+    if not _cin7_ok:
+        st.warning(
+            "Cin7 is not connected. Add your Cin7 credentials to Streamlit secrets:\n\n"
+            "```\n[cin7]\nbase_url = \"https://inventory.dearsystems.com/ExternalApi\"\n"
+            "api_username = \"your-account-id\"\napi_key = \"your-api-key\"\n```"
+        )
+    else:
+        from cin7_fetch import fetch_purchase_orders, fetch_shipments, summarise_po, summarise_shipment
+
+        q_default = proj["meta"].get("project_number", "").strip()
+        q_input = st.text_input(
+            "Q Number (job reference)",
+            value=q_default,
+            placeholder="e.g. Q12345",
+            help="Enter the Q number used in Cin7 to link POs and shipments to this job."
+        )
+
+        if st.button("Fetch from Cin7", type="primary", disabled=not q_input.strip()):
+            with st.spinner(f"Searching Cin7 for '{q_input}'..."):
+                try:
+                    pos = fetch_purchase_orders(q_input)
+                    ships = fetch_shipments(q_input)
+                    st.session_state["cin7_pos"] = pos
+                    st.session_state["cin7_ships"] = ships
+                    st.session_state["cin7_q"] = q_input
+                except Exception as e:
+                    st.error(f"Cin7 fetch failed: {e}")
+
+        if st.session_state.get("cin7_pos") is not None:
+            pos = st.session_state["cin7_pos"]
+            ships = st.session_state["cin7_ships"]
+            q_used = st.session_state.get("cin7_q", q_input)
+
+            st.caption(f"Results for **{q_used}** — {len(pos)} purchase order(s), {len(ships)} shipment(s)")
+
+            # --- Purchase Orders ---
+            st.markdown("### Purchase Orders")
+            if pos:
+                po_rows = [summarise_po(p) for p in pos]
+                st.dataframe(po_rows, use_container_width=True)
+
+                # Highlight anything with outstanding qty
+                outstanding = [r for r in po_rows if (r.get("Outstanding") or 0) > 0]
+                if outstanding:
+                    st.warning(f"{len(outstanding)} PO(s) have items not yet received:")
+                    st.dataframe(outstanding, use_container_width=True)
+                else:
+                    st.success("All ordered quantities have been received.")
+            else:
+                st.info(f"No purchase orders found with reference '{q_used}'.")
+
+            # --- Shipments / Goods Received ---
+            st.markdown("### Shipments / Goods Received")
+            if ships:
+                ship_rows = [summarise_shipment(s) for s in ships]
+                st.dataframe(ship_rows, use_container_width=True)
+            else:
+                st.info(f"No shipments found with reference '{q_used}'.")
+
+            # Button to pull Cin7 data into the ordering/deliveries tabs
+            st.divider()
+            if pos and st.button("Import PO data into Orders & Procurement tab"):
+                for p in pos:
+                    summary = summarise_po(p)
+                    lines = p.get("lineItems") or p.get("LineItems") or p.get("lines") or []
+                    for ln in lines:
+                        desc = ln.get("name") or ln.get("description") or ln.get("productName") or ln.get("sku") or ""
+                        proj["ordering"].append({
+                            "description": desc,
+                            "supplier": summary["Supplier"],
+                            "po_ref": str(summary["PO Number"]),
+                            "order_date": summary["Date"][:10] if summary["Date"] else "",
+                            "eta": summary["Expected Date"][:10] if summary["Expected Date"] else "",
+                            "status": summary["Status"],
+                        })
+                st.success(f"Imported {len(pos)} PO(s) into Orders tab. Check Tab 3.")
+
+with tabs[5]:
     st.subheader("Generate the handover PDF")
     name = proj["meta"]["project_name"].strip()
     if not name:
