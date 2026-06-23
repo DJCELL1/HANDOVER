@@ -305,7 +305,7 @@ with tabs[3]:
     f["notes"] = st.text_area("Financial notes", f["notes"], height=70)
 
 with tabs[4]:
-    st.subheader("Cin7 Live Data — Purchase Orders & Shipments")
+    st.subheader("Cin7 Live Data")
 
     _cin7_ok = "cin7" in st.secrets
     if not _cin7_ok:
@@ -315,75 +315,95 @@ with tabs[4]:
             "api_username = \"your-account-id\"\napi_key = \"your-api-key\"\n```"
         )
     else:
-        from cin7_fetch import fetch_purchase_orders, fetch_shipments, summarise_po, summarise_shipment
+        from cin7_fetch import (fetch_purchase_orders, fetch_shipments, fetch_sales_orders,
+                                po_lines, shipment_lines, sales_order_lines)
 
         q_default = proj["meta"].get("project_number", "").strip()
         q_input = st.text_input(
             "Q Number (job reference)",
             value=q_default,
             placeholder="e.g. Q12345",
-            help="Enter the Q number used in Cin7 to link POs and shipments to this job."
         )
 
         if st.button("Fetch from Cin7", type="primary", disabled=not q_input.strip()):
             with st.spinner(f"Searching Cin7 for '{q_input}'..."):
                 try:
-                    pos = fetch_purchase_orders(q_input)
+                    pos   = fetch_purchase_orders(q_input)
                     ships = fetch_shipments(q_input)
-                    st.session_state["cin7_pos"] = pos
+                    sos   = fetch_sales_orders(q_input)
+                    st.session_state["cin7_pos"]   = pos
                     st.session_state["cin7_ships"] = ships
-                    st.session_state["cin7_q"] = q_input
+                    st.session_state["cin7_sos"]   = sos
+                    st.session_state["cin7_q"]     = q_input
                 except Exception as e:
                     st.error(f"Cin7 fetch failed: {e}")
 
         if st.session_state.get("cin7_pos") is not None:
-            pos = st.session_state["cin7_pos"]
+            pos   = st.session_state["cin7_pos"]
             ships = st.session_state["cin7_ships"]
+            sos   = st.session_state.get("cin7_sos", [])
             q_used = st.session_state.get("cin7_q", q_input)
 
-            st.caption(f"Results for **{q_used}** — {len(pos)} purchase order(s), {len(ships)} shipment(s)")
+            st.caption(
+                f"Results for **{q_used}** — "
+                f"{len(pos)} PO(s) · {len(ships)} shipment(s) · {len(sos)} sales order(s)"
+            )
 
-            # --- Purchase Orders ---
-            st.markdown("### Purchase Orders")
+            # ---- Purchase Orders (line level) ----
+            st.markdown("### Purchase Orders — Line Items")
             if pos:
-                po_rows = [summarise_po(p) for p in pos]
-                st.dataframe(po_rows, use_container_width=True)
-
-                # Highlight anything with outstanding qty
-                outstanding = [r for r in po_rows if (r.get("Outstanding") or 0) > 0]
-                if outstanding:
-                    st.warning(f"{len(outstanding)} PO(s) have items not yet received:")
-                    st.dataframe(outstanding, use_container_width=True)
+                po_line_rows = po_lines(pos)
+                outstanding_lines = [r for r in po_line_rows
+                                     if isinstance(r.get("Outstanding"), (int, float)) and r["Outstanding"] > 0]
+                if outstanding_lines:
+                    st.warning(f"{len(outstanding_lines)} line(s) not yet fully received:")
+                    st.dataframe(outstanding_lines, use_container_width=True)
+                    with st.expander("Show all PO lines"):
+                        st.dataframe(po_line_rows, use_container_width=True)
                 else:
-                    st.success("All ordered quantities have been received.")
+                    st.success("All PO lines fully received.")
+                    st.dataframe(po_line_rows, use_container_width=True)
             else:
-                st.info(f"No purchase orders found with reference '{q_used}'.")
+                st.info(f"No purchase orders found for '{q_used}'.")
 
-            # --- Shipments / Goods Received ---
-            st.markdown("### Shipments / Goods Received")
+            # ---- Shipments / Goods Received (line level) ----
+            st.markdown("### Shipments / Goods Received — Line Items")
             if ships:
-                ship_rows = [summarise_shipment(s) for s in ships]
-                st.dataframe(ship_rows, use_container_width=True)
+                ship_line_rows = shipment_lines(ships)
+                st.dataframe(ship_line_rows, use_container_width=True)
             else:
-                st.info(f"No shipments found with reference '{q_used}'.")
+                st.info(f"No shipments found for '{q_used}'.")
 
-            # Button to pull Cin7 data into the ordering/deliveries tabs
+            # ---- Sales Orders (line level) ----
+            st.markdown("### Sales Orders — Line Items")
+            if sos:
+                so_line_rows = sales_order_lines(sos)
+                so_outstanding = [r for r in so_line_rows
+                                  if isinstance(r.get("Outstanding"), (int, float)) and r["Outstanding"] > 0]
+                if so_outstanding:
+                    st.warning(f"{len(so_outstanding)} line(s) not yet fulfilled:")
+                    st.dataframe(so_outstanding, use_container_width=True)
+                    with st.expander("Show all SO lines"):
+                        st.dataframe(so_line_rows, use_container_width=True)
+                else:
+                    st.success("All sales order lines fulfilled.")
+                    st.dataframe(so_line_rows, use_container_width=True)
+            else:
+                st.info(f"No sales orders found for '{q_used}'.")
+
+            # ---- Import into Orders tab ----
             st.divider()
-            if pos and st.button("Import PO data into Orders & Procurement tab"):
-                for p in pos:
-                    summary = summarise_po(p)
-                    lines = p.get("lineItems") or p.get("LineItems") or p.get("lines") or []
-                    for ln in lines:
-                        desc = ln.get("name") or ln.get("description") or ln.get("productName") or ln.get("sku") or ""
-                        proj["ordering"].append({
-                            "description": desc,
-                            "supplier": summary["Supplier"],
-                            "po_ref": str(summary["PO Number"]),
-                            "order_date": summary["Date"][:10] if summary["Date"] else "",
-                            "eta": summary["Expected Date"][:10] if summary["Expected Date"] else "",
-                            "status": summary["Status"],
-                        })
-                st.success(f"Imported {len(pos)} PO(s) into Orders tab. Check Tab 3.")
+            if pos and st.button("Import PO lines into Orders & Procurement tab"):
+                for row in po_lines(pos):
+                    proj["ordering"].append({
+                        "description": row["Description"] or row["SKU"],
+                        "supplier": row["Supplier"],
+                        "po_ref": str(row["PO Number"]),
+                        "order_date": row["Order Date"],
+                        "eta": row["ETA"],
+                        "status": row["PO Status"],
+                    })
+                st.success("PO lines imported into Tab 3.")
 
 with tabs[5]:
     st.subheader("Generate the handover PDF")
