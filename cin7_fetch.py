@@ -125,13 +125,16 @@ def po_lines(pos):
                 "Unit Price": "",
                 "PO Status": po_status,
             })
+        po_received = str(po_status).strip().lower() == "received"
         for ln in lines:
             qty_ord = ln.get("qty") or ln.get("quantity") or ln.get("Qty") or 0
             qty_rec = ln.get("qtyReceived") or ln.get("receivedQty") or ln.get("QtyReceived") or 0
+            ln_status = str(ln.get("status") or "").strip().lower()
+            line_received = ln_status == "received" or po_received
             try:
-                outstanding = max(0, float(qty_ord) - float(qty_rec))
+                outstanding = 0 if line_received else max(0, float(qty_ord) - float(qty_rec))
             except (TypeError, ValueError):
-                outstanding = ""
+                outstanding = 0 if line_received else ""
             rows.append({
                 "PO Number": po_num,
                 "Reference": ref,
